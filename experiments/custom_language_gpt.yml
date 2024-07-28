@@ -12,7 +12,7 @@ use_tb_logger: true
 datasets:
   train:
     name: train_dataset
-    n_workers: 8 # idk what this does
+    n_workers: 4 # idk what this does
     batch_size: 128 # This leads to ~16GB of vram usage on my 3090.
     mode: paired_voice_audio
     path: ../../dataset/train.txt
