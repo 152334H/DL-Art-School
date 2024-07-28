@@ -1,0 +1,169 @@
+name: custom_language_gpt
+model: extensibletrainer
+scale: 1
+gpu_ids: [0] # <-- unless you have multiple gpus, use this
+start_step: 0 # -1 causes 0.pth to be saved!
+checkpointing_enabled: true  # <-- Gradient checkpointing. Enable for huge GPU memory savings. Disable for distributed training.
+fp16: false # TODO: why does enabling this with 8bit slow down perf??
+use_8bit: true
+wandb: false  # <-- enable to log to wandb. tensorboard logging is always enabled.
+use_tb_logger: true
+
+datasets:
+  train:
+    name: train_dataset
+    n_workers: 8 # idk what this does
+    batch_size: 128 # This leads to ~16GB of vram usage on my 3090.
+    mode: paired_voice_audio
+    path: ../../dataset/train.txt
+    fetcher_mode: ['lj'] # CHANGEME if your dataset isn't in LJSpeech format
+    phase: train
+    max_wav_length: 255995
+    max_text_length: 200
+    sample_rate: 22050
+    load_conditioning: True
+    num_conditioning_candidates: 2
+    conditioning_length: 44000
+    use_bpe_tokenizer: True
+    load_aligned_codes: False
+    tokenizer_vocab: ../custom_language_tokenizer.json
+  val:
+    name: val_dataset
+    n_workers: 1
+    batch_size: 64 # this could be higher probably
+    mode: paired_voice_audio
+    path: ../../dataset/val.txt
+    fetcher_mode: ['lj']
+    phase: val # might be broken idk
+    max_wav_length: 255995
+    max_text_length: 200
+    sample_rate: 22050
+    load_conditioning: True
+    num_conditioning_candidates: 2
+    conditioning_length: 44000
+    use_bpe_tokenizer: True
+    load_aligned_codes: False
+    tokenizer_vocab: ../custom_language_tokenizer.json
+
+steps:        
+  gpt_train:
+    training: gpt
+    loss_log_buffer: 500 # no idea what this does
+
+    # Generally follows the recipe from the DALLE paper.
+    optimizer: adamw # this should be adamw_zero if you're using distributed training
+    #optimizer: lion
+    optimizer_params:
+      lr: !!float 1e-5 # CHANGEME: this was originally 1e-4; I reduced it to 1e-5 because it's fine-tuning, but **you should experiment with this value**
+      #lr: !!float 2e-6 # USE LOWER LR for LION
+      triton: false # ONLY RELEVANT FOR LION
+      weight_decay: !!float 1e-2
+      beta1: 0.9
+      beta2: 0.96
+    clip_grad_eps: 4
+
+    injectors:  # TODO: replace this entire sequence with the GptVoiceLatentInjector
+      paired_to_mel:
+        type: torch_mel_spectrogram
+        mel_norm_file: ../experiments/clips_mel_norms.pth
+        in: wav
+        out: paired_mel
+      paired_cond_to_mel:
+        type: for_each
+        subtype: torch_mel_spectrogram
+        mel_norm_file: ../experiments/clips_mel_norms.pth
+        in: conditioning
+        out: paired_conditioning_mel
+      to_codes:
+        type: discrete_token
+        in: paired_mel
+        out: paired_mel_codes
+        dvae_config: "../experiments/train_diffusion_vocoder_22k_level.yml" # EXTREMELY IMPORTANT
+      paired_fwd_text:
+        type: generator
+        generator: gpt
+        in: [paired_conditioning_mel, padded_text, text_lengths, paired_mel_codes, wav_lengths]
+        out: [loss_text_ce, loss_mel_ce, logits]      
+    losses:
+      text_ce:
+        type: direct
+        weight: .01
+        key: loss_text_ce
+      mel_ce:
+        type: direct
+        weight: 1
+        key: loss_mel_ce
+
+networks:
+  gpt:
+    type: generator 
+    which_model_G: unified_voice2 # none of the unified_voice*.py files actually match the tortoise inference code... 4 and 3 have "alignment_head" (wtf is that?), 2 lacks the types=1 parameter.
+    kwargs:
+      layers: 30 # WAS 8
+      model_dim: 1024 # WAS 512
+      heads: 16 # WAS 8
+      max_text_tokens: 402 # WAS 120
+      max_mel_tokens: 604 # WAS 250
+      max_conditioning_inputs: 2 # WAS 1
+      mel_length_compression: 1024
+      number_text_tokens: 256 # supposed to be 255 for newer unified_voice files 
+      number_mel_codes: 8194
+      start_mel_token: 8192
+      stop_mel_token: 8193
+      start_text_token: 255
+      train_solo_embeddings: False # missing in uv3/4
+      use_mel_codes_as_input: True # ditto
+      checkpointing: True
+      tortoise_compat: True
+      #types: 1 # this is MISSING, but in my analysis 1 is equivalent to not having it.
+      #only_alignment_head: False  # uv3/4
+
+path:
+  pretrain_model_gpt: '../experiments/autoregressive.pth' # CHANGEME: copy this from tortoise cache
+  strict_load: true
+  #resume_state: ../experiments/train_imgnet_vqvae_stage1/training_state/0.state   # <-- Set this to resume from a previous training state.
+
+# afaik all units here are measured in **steps** (i.e. one batch of batch_size is 1 unit)
+train: # CHANGEME: ALL OF THESE PARAMETERS SHOULD BE EXPERIMENTED WITH
+  niter: 5000
+  warmup_iter: -1
+  mega_batch_factor: 4    # <-- Gradient accumulation factor. If you are running OOM, increase this to [2,4,8].
+  val_freq: 500 # TODO set this to epoch size * something
+
+  default_lr_scheme: MultiStepLR
+  gen_lr_steps: [500, 1000, 1400, 1800] #[50000, 100000, 140000, 180000]
+  lr_gamma: 0.5
+  ema_enabled: false
+  #manual_seed: 1337 # add this if you want reproducibility
+
+eval:
+  pure: true # see train.py
+
+logger:
+  print_freq: 100 # TODO: set this to epoch size
+  save_checkpoint_freq: 500 # CHANGEME: especially you should increase this it's really slow
+  visuals: [gen, mel] #TODO: figure this out
+  visual_debug_rate: 500
+  is_mel_spectrogram: true
+  disable_state_saving: true # CHANGEME if you plan to halt training inbetween
+
+upgrades:
+  # Variable: number_of_checkpoints_to_save
+  # Description: Define how many checkpoints should be saved on disk (1 checkpoint = pth+ =~ 6.8 GB)
+  # Type: integer
+  # Value: should be the same value as for number_of_states_to_save
+  # smaller than 1 - turn off this option; there is no max value. For Colab use 1 or 2.
+  # For Colab use 1 or 2 for gDrive and 5 for instance drive
+  # 1 == Leave last saved checkpoint + last saved state (about 6.8 GB).
+  # 2 == Leave last 2 saved checkpoints + last saved states (about 2 *~ 6.8 GB =~ 13.6 GB).
+  number_of_checkpoints_to_save: 0
+  # Variable: number_of_states_to_save
+  # Description: Define how many states should be saved on disk (1 state =~ 3.4 GB)
+  # if disable_state_saving is set as true this option will be inactive
+  # Type: integer
+  # Value: should be the same value as for number_of_checkpoints_to_save
+  # smaller than 1 - turn off this option; there is no max value.
+  # For Colab use 1 or 2 for gDrive and 5 for instance drive
+  # 1 == Leave last saved state (about 3.4 GB).
+  # 2 == Leave last 2 saved states (about 2 *~ 3.4 GB =~ 6.8 GB).
+  number_of_states_to_save: 0
