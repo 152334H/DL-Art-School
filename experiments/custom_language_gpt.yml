@@ -12,8 +12,8 @@ use_tb_logger: true
 datasets:
   train:
     name: train_dataset
-    n_workers: 4 # idk what this does
-    batch_size: 128 # This leads to ~16GB of vram usage on my 3090.
+    n_workers: 1 # idk what this does
+    batch_size: 4 # This leads to ~16GB of vram usage on my 3090.
     mode: paired_voice_audio
     path: ../../dataset/train.txt
     fetcher_mode: ['lj'] # CHANGEME if your dataset isn't in LJSpeech format
@@ -30,7 +30,7 @@ datasets:
   val:
     name: val_dataset
     n_workers: 1
-    batch_size: 64 # this could be higher probably
+    batch_size: 2 # this could be higher probably
     mode: paired_voice_audio
     path: ../../dataset/val.txt
     fetcher_mode: ['lj']
