@@ -166,3 +166,4 @@ archive
 NOTES_unredacted.md
 pyfastmp3decoder/
 
+!experiments/custom_language_gpt.yml

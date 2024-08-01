@@ -1,4 +1,4 @@
-import maybe_bnb 
+import maybe_bnb
 import os
 import math
 import argparse
@@ -19,7 +19,7 @@ from time import time
 from datetime import datetime
 
 from utils.util import opt_get, map_cuda_to_correct_device
-
+import multiprocessing as mp
 
 def init_dist(backend, **kwargs):
     # These packages have globals that screw with Windows, so only import them if needed.
@@ -280,7 +280,7 @@ class Trainer:
                     self.model.limit_number_of_checkpoints_and_states(
                         next(iter(opt['networks'].keys())),
                         models_number=opt['upgrades']['number_of_checkpoints_to_save'],
-                        state_number=opt['upgrades']['number_of_states_to_save'],
+                        state_number=number_of_states_to_save,
                     )
 
                 self.model.save(self.current_step)
@@ -368,6 +368,7 @@ class Trainer:
 
 
 if __name__ == '__main__':
+    mp.set_start_method('spawn')
     parser = argparse.ArgumentParser()
     parser.add_argument('-opt', type=str, help='Path to option YAML file.', default='../options/train_vit_latent.yml')
     parser.add_argument('--launcher', choices=['none', 'pytorch'], default='none', help='job launcher')

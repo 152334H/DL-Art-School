@@ -22,7 +22,7 @@ from shutil import get_terminal_size
 import scp
 import paramiko
 from torch.utils.checkpoint import checkpoint
-from torch._six import inf
+from torch import inf
 
 import yaml
 
